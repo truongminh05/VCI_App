@@ -1,10 +1,10 @@
 {
   "expo": {
-    "name": "VCI-App-FIXED",
-    "slug": "VCI-App-FIXED",
+    "name": "VCI - CĐ Công Thương VN",
+    "slug": "vci-truong-cd-cong-thuong-vn",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/logo-vci.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
@@ -21,7 +21,8 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.truongminh.VCIAppFIXED"
     },
     "web": {
       "favicon": "./assets/favicon.png"

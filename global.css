@@ -1,0 +1,4 @@
+@config "./tailwind.config.js"; /* thêm dòng này để chắc chắn load đúng config */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
