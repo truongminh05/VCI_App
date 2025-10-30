@@ -1,10 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { View, Text, Alert } from "react-native";
-import QRCode from "react-native-qrcode-svg"; // yarn add react-native-qrcode-svg
+import QRCode from "react-native-qrcode-svg";
 import Card from "../../../components/Card";
 import { supabase } from "../../../lib/supabase";
-import Button from "../../../components/Button";
 
 function fmt(iso) {
   try {
@@ -16,13 +15,13 @@ function fmt(iso) {
 
 export default function AttendanceSessionScreen({ route }) {
   const buoihoc_id = route?.params?.buoihoc_id;
-  const [info, setInfo] = useState(null); // buoihoc + qr_khoang_giay
+  const [info, setInfo] = useState(null); // buổi học
   const [payload, setPayload] = useState(null); // {sid, slot, sig}
   const [status, setStatus] = useState("idle"); // idle|running|closed|ended
-  const timerRef = useRef(null);
-  const [tick, setTick] = useState(0); // force re-render per second
+  const tickRef = useRef(null);
+  const [tick, setTick] = useState(0);
 
-  // Load thông tin buổi học
+  // 1) Load thông tin buổi học
   useEffect(() => {
     (async () => {
       const { data, error } = await supabase
@@ -37,10 +36,10 @@ export default function AttendanceSessionScreen({ route }) {
     })();
   }, [buoihoc_id]);
 
-  // Tick mỗi giây để kiểm tra thời gian cửa/đóng
+  // 2) Tick mỗi giây để kiểm tra thời gian
   useEffect(() => {
-    timerRef.current = setInterval(() => setTick((x) => x + 1), 1000);
-    return () => clearInterval(timerRef.current);
+    tickRef.current = setInterval(() => setTick((x) => x + 1), 1000);
+    return () => clearInterval(tickRef.current);
   }, []);
 
   const now = new Date();
@@ -55,10 +54,11 @@ export default function AttendanceSessionScreen({ route }) {
     return now > new Date(info.thoi_gian_ket_thuc);
   }, [info, tick]);
 
-  // Lấy QR khi cần (đang trong cửa)
+  // 3) Lấy QR khi cần
   useEffect(() => {
+    if (!info) return;
+
     const run = async () => {
-      if (!info) return;
       if (ended) {
         setStatus("ended");
         setPayload(null);
@@ -72,30 +72,37 @@ export default function AttendanceSessionScreen({ route }) {
 
       setStatus("running");
 
-      // slot tính theo epoch / qr_khoang_giay để đồng bộ giữa thầy & trò
-      const slot = Math.floor(Date.now() / 1000 / (info.qr_khoang_giay || 20));
+      // Tính slot theo khoảng thời gian QR
+      const period = info.qr_khoang_giay || 20;
+      const slot = Math.floor(Date.now() / 1000 / period);
 
+      // ✅ GỌI RPC (bạn đã bỏ mất đoạn này)
       const { data, error } = await supabase.rpc("sign_qr", {
         p_buoihoc_id: info.id,
         p_slot: slot,
       });
+
       if (error) {
-        // Lỗi schema/rls… => báo 1 lần
         console.log("sign_qr error", error);
+        // Giữ status nhưng không set payload để màn vẫn “Đang chờ…”
         return;
       }
+
       if (data?.ok) {
         setPayload({ sid: data.sid, slot: data.slot, sig: data.sig });
       } else {
-        // WINDOW_CLOSED/SESSION_NOT_FOUND…
+        // SERVER trả về WINDOW_CLOSED / SESSION_NOT_FOUND / v.v.
+        console.log("sign_qr not ok", data);
         setPayload(null);
         setStatus(data?.error === "WINDOW_CLOSED" ? "closed" : "idle");
       }
     };
 
+    // gọi ngay lần đầu
     run();
-    // cứ mỗi qr_khoang_giay lại gọi ký 1 lần
-    const iv = setInterval(run, (info?.qr_khoang_giay || 20) * 1000);
+
+    // gọi lặp theo chu kỳ QR
+    const iv = setInterval(run, (info.qr_khoang_giay || 20) * 1000);
     return () => clearInterval(iv);
   }, [info, inLateWindow, ended]);
 
@@ -106,6 +113,7 @@ export default function AttendanceSessionScreen({ route }) {
           <Text className="text-white text-lg font-semibold mb-2">
             Phiên điểm danh
           </Text>
+
           {info && (
             <>
               <Text className="text-zinc-400">
