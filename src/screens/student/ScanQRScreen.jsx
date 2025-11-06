@@ -1,51 +1,98 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { SafeAreaView } from "react-native-safe-area-context";
-import Button from "../../components/Button";
 import { View, Text, StyleSheet, Alert } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
+import Button from "../../components/Button";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
 
-const STATUS_ON_TIME = "dung_gio"; // đổi theo enum của bạn nếu khác
+const STATUS_ON_TIME = "dung_gio";
+const STATUS_LATE = "tre";
 
 export default function ScanQRScreen() {
   const { user } = useAuth();
   const [permission, requestPermission] = useCameraPermissions();
-  const [isScanning, setIsScanning] = useState(false);
-  const [busy, setBusy] = useState(false);
+
+  const [isScanning, setIsScanning] = useState(false); // bật/tắt camera
+  const [busy, setBusy] = useState(false); // đang xử lý RPC
+  const lastScanRef = useRef(0); // chống double-scan trong vài ms
 
   useEffect(() => {
     if (!permission || !permission.granted) requestPermission();
   }, [permission]);
 
   const onBarcodeScanned = async ({ data }) => {
-    if (busy) return;
+    // chống bắn callback liên tục
+    const now = Date.now();
+    if (busy || now - lastScanRef.current < 1200) return;
+    lastScanRef.current = now;
+
+    // TẮT CAMERA NGAY để ngăn vòng lặp
+    setIsScanning(false);
     setBusy(true);
+
     try {
-      let payload = null;
+      let payload;
       try {
         payload = JSON.parse(data);
       } catch {
         throw new Error("Mã QR không hợp lệ.");
       }
-      const { sid /* buoihoc_id */, slot, sig } = payload || {};
-      if (!sid) throw new Error("Thiếu buoihoc_id trong QR.");
 
-      // ✅ Ghi nhận điểm danh qua RPC ép kiểu ENUM ở DB
-      // (nếu bạn cần xác thực chữ ký/số slot, hãy làm bên trong hàm SQL của bạn)
+      const { sid /* buoihoc_id */, slot, sig, phase } = payload || {};
+      if (!sid) throw new Error("Thiếu buoihoc_id trong QR.");
+      // Quy tắc duy nhất: phase bắt buộc phải có và phải là "ontime" | "late"
+      if (phase !== "ontime" && phase !== "late") {
+        throw new Error("Mã QR không hợp lệ hoặc đã hết hạn (thiếu phase).");
+      }
+      const statusVal = phase === "ontime" ? STATUS_ON_TIME : STATUS_LATE;
+      // Ghi nhận điểm danh (giả định RPC đã xác thực chữ ký/số slot trong DB)
       const { error } = await supabase.rpc("insert_diemdanh_qr", {
         p_buoihoc: sid,
-        p_trang_thai: STATUS_ON_TIME, // "dung_gio"
-        // p_sinhvien: không truyền -> mặc định auth.uid()
+        p_trang_thai: statusVal, // "dung_gio" | "tre_gio"
+        // nếu hàm nhận mặc định auth.uid() thì không cần truyền p_sinhvien
       });
       if (error) throw error;
 
-      Alert.alert("Thành công", "Đã ghi nhận điểm danh!");
+      Alert.alert(
+        "Thành công",
+        `Đã ghi nhận điểm danh: ${
+          statusVal === STATUS_ON_TIME ? "Đúng giờ" : "Trễ giờ"
+        }`,
+        [
+          {
+            text: "Quét lại",
+            onPress: () => {
+              setBusy(false);
+              // tùy ý bật lại camera để quét tiếp
+              setIsScanning(true);
+            },
+          },
+          {
+            text: "Đóng",
+            onPress: () => {
+              setBusy(false);
+              // giữ camera tắt
+            },
+            style: "cancel",
+          },
+        ]
+      );
+      return; // kết thúc sớm để không vào finally setIsScanning(true)
     } catch (e) {
-      Alert.alert("Lỗi", e.message || "Không thể xử lý mã QR.");
+      Alert.alert("Lỗi", e?.message || "Không thể xử lý mã QR.", [
+        {
+          text: "Quét lại",
+          onPress: () => {
+            setBusy(false);
+            setIsScanning(true);
+          },
+        },
+      ]);
     } finally {
+      // nếu người dùng không chọn gì (trên Android có thể back Alert),
+      // đảm bảo không bị kẹt trạng thái busy
       setBusy(false);
-      setIsScanning(false);
     }
   };
 
@@ -81,8 +128,11 @@ export default function ScanQRScreen() {
             Mã QR động do Giảng viên hiển thị sẽ thay đổi theo thời gian.
           </Text>
           <Button
-            title="Bắt đầu quét"
-            onPress={() => setIsScanning(true)}
+            title={busy ? "Đang xử lý..." : "Bắt đầu quét"}
+            onPress={() => {
+              lastScanRef.current = 0; // reset chống double trước khi bật lại
+              setIsScanning(true);
+            }}
             disabled={busy}
           />
         </View>

@@ -60,7 +60,8 @@ export default function SessionsScreen() {
   const [monhocId, setMonhocId] = useState(null);
   const [startAt, setStartAt] = useState(""); // ISO string
   const [endAt, setEndAt] = useState(""); // ISO string
-  const [lateMinutes, setLateMinutes] = useState("10");
+  const [onTimeMinutes, setOnTimeMinutes] = useState("10"); // ⭐ Admin đặt phút đúng giờ
+  const [lateMinutes, setLateMinutes] = useState("10"); // ⭐ Admin đặt phút trễ
   const [creating, setCreating] = useState(false);
 
   const createSession = async () => {
@@ -79,33 +80,71 @@ export default function SessionsScreen() {
         "Thời gian kết thúc phải sau thời gian bắt đầu."
       );
 
+    // Kiểm tra số phút
+    const ontime = parseInt(onTimeMinutes || "0", 10);
     const tre = parseInt(lateMinutes || "0", 10);
-    if (Number.isNaN(tre) || tre < 0)
-      return Alert.alert("Sai", "Thời gian trễ phải là số ≥ 0.");
+    if (!Number.isFinite(ontime) || ontime < 0)
+      return Alert.alert("Sai", "Phút đúng giờ phải là số ≥ 0.");
+    if (!Number.isFinite(tre) || tre < 0)
+      return Alert.alert("Sai", "Phút trễ phải là số ≥ 0.");
 
     try {
       setCreating(true);
-      // Gọi RPC đã tạo ở DB: public.create_buoihoc(
-      //   p_lop_id uuid,
-      //   p_thoi_gian_bat_dau timestamptz,
-      //   p_thoi_gian_ket_thuc timestamptz,
-      //   p_monhoc_id uuid default null,
-      //   p_tre_sau_phut int default 10
-      // )
-      const { data, error } = await supabase.rpc("create_buoihoc", {
-        p_lop_id: lop.id,
-        p_monhoc_id: monhocId ?? null,
-        p_thoi_gian_bat_dau: new Date(startAt).toISOString(),
-        p_thoi_gian_ket_thuc: new Date(endAt).toISOString(),
-        p_tre_sau_phut: parseInt(lateMinutes || "10", 10),
-      });
-      if (error) throw error;
+
+      // 1) Tạo buổi (ghi phút trễ vào p_tre_sau_phut)
+      const startISO = new Date(startAt).toISOString();
+      const endISO = new Date(endAt).toISOString();
+
+      const { data: createdData, error: errCreate } = await supabase.rpc(
+        "create_buoihoc",
+        {
+          p_lop_id: lop.id,
+          p_thoi_gian_bat_dau: new Date(startAt).toISOString(),
+          p_thoi_gian_ket_thuc: new Date(endAt).toISOString(),
+          p_monhoc_id: monhocId ?? null,
+          p_tre_sau_phut: Number(lateMinutes),
+        }
+      );
+      if (errCreate) throw errCreate;
+
+      // 2) Lấy id buổi học vừa tạo
+      //    TH1: RPC trả về uuid trực tiếp
+      let buoihocId =
+        typeof createdData === "string" ? createdData : createdData?.id || null;
+
+      //    TH2: nếu RPC không trả về id -> dò theo key tự nhiên (tránh giả sử; vẫn an toàn vì filter chặt)
+      if (!buoihocId) {
+        const { data: found, error: errFind } = await supabase
+          .from("buoihoc")
+          .select("id")
+          .eq("lop_id", lop.id)
+          .eq("thoi_gian_bat_dau", startISO)
+          .eq("thoi_gian_ket_thuc", endISO)
+          .maybeSingle();
+        if (errFind || !found)
+          throw new Error("Không tìm thấy buổi học vừa tạo.");
+        buoihocId = found.id;
+      }
+
+      // 3) Tính mốc mo_tu & dong_den theo quyết định của Admin
+      const t0 = new Date(startISO).getTime();
+      const mo_tuISO = new Date(t0 + ontime * 60000).toISOString();
+      const dong_denISO = new Date(t0 + (ontime + tre) * 60000).toISOString();
+
+      // 4) Cập nhật buoihoc: mo_tu, dong_den
+      const { error: errUpdate } = await supabase
+        .from("buoihoc")
+        .update({ mo_tu: mo_tuISO, dong_den: dong_denISO })
+        .eq("id", buoihocId);
+      if (errUpdate) throw errUpdate;
 
       Alert.alert("OK", "Đã tạo buổi học.");
+
       // Reset form
       setMonhocId(null);
       setStartAt("");
       setEndAt("");
+      setOnTimeMinutes("10");
       setLateMinutes("10");
     } catch (e) {
       Alert.alert("Lỗi tạo buổi học", e?.message || String(e));
@@ -122,7 +161,10 @@ export default function SessionsScreen() {
         contentContainerStyle={{ paddingBottom: 50 }}
         keyboardShouldPersistTaps="handled"
       >
-        <Section title="Tạo buổi học" subtitle="Nhập thời gian & trễ QR" />
+        <Section
+          title="Tạo buổi học"
+          subtitle="Nhập thời gian & quy định đúng/trễ"
+        />
         <View className="px-5">
           <Card>
             <Text className="text-zinc-400 mb-2">Lớp</Text>
@@ -151,9 +193,17 @@ export default function SessionsScreen() {
               autoCapitalize="none"
             />
 
-            <Text className="text-zinc-400 mt-3 mb-2">
-              Thời gian trễ (phút)
-            </Text>
+            <Text className="text-zinc-400 mt-3 mb-2">Phút đúng giờ</Text>
+            <TextInput
+              className="bg-zinc-800 rounded-xl px-4 py-3 text-white"
+              placeholder="10"
+              placeholderTextColor="#9ca3af"
+              keyboardType="numeric"
+              value={onTimeMinutes}
+              onChangeText={setOnTimeMinutes}
+            />
+
+            <Text className="text-zinc-400 mt-3 mb-2">Phút trễ</Text>
             <TextInput
               className="bg-zinc-800 rounded-xl px-4 py-3 text-white"
               placeholder="10"

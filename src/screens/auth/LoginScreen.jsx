@@ -8,9 +8,11 @@ import {
   Alert,
   Image,
   ScrollView,
+  TouchableOpacity,
   useWindowDimensions,
   StyleSheet,
 } from "react-native";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import Button from "../../components/Button";
 import Card from "../../components/Card";
 import { supabase } from "../../lib/supabase";
@@ -20,6 +22,7 @@ export default function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [asTeacher, setAsTeacher] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const { refreshHoso } = useAuth();
   const { width } = useWindowDimensions();
@@ -79,7 +82,7 @@ export default function LoginScreen() {
             <Text className="text-zinc-400 mb-2">Email</Text>
             <TextInput
               className="bg-zinc-800 rounded-xl px-4 py-3 text-white"
-              placeholder="you@example.com"
+              placeholder="Nhập email được cấp"
               placeholderTextColor="#9ca3af"
               autoCapitalize="none"
               keyboardType="email-address"
@@ -88,14 +91,26 @@ export default function LoginScreen() {
             />
 
             <Text className="text-zinc-400 mt-4 mb-2">Mật khẩu</Text>
-            <TextInput
-              className="bg-zinc-800 rounded-xl px-4 py-3 text-white"
-              placeholder="••••••••"
-              placeholderTextColor="#9ca3af"
-              secureTextEntry
-              value={password}
-              onChangeText={setPassword}
-            />
+            <View style={styles.passwordField}>
+              <TextInput
+                className="flex-1 text-white py-3"
+                placeholder="********"
+                placeholderTextColor="#9ca3af"
+                secureTextEntry={!showPassword}
+                value={password}
+                onChangeText={setPassword}
+              />
+              <TouchableOpacity
+                onPress={() => setShowPassword((prev) => !prev)}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <Ionicons
+                  name={showPassword ? "eye-off-outline" : "eye-outline"}
+                  size={22}
+                  color="#9ca3af"
+                />
+              </TouchableOpacity>
+            </View>
 
             <View className="flex-row items-center justify-between mt-4">
               <Text className="text-zinc-400">Gợi ý vai trò Giáo viên?</Text>
@@ -111,8 +126,8 @@ export default function LoginScreen() {
           </Card>
 
           <Text className="text-zinc-400 mt-6 text-center">
-            * Sau đăng nhập, ứng dụng đọc vai trò từ bảng{" "}
-            <Text className="text-indigo-400">hoso</Text>.
+            * Ứng dụng được phát triển bởi{" "}
+            <Text className="text-indigo-400">Nhóm 4</Text>.
           </Text>
         </View>
       </ScrollView>
@@ -139,5 +154,12 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: "800",
     textAlign: "center",
+  },
+  passwordField: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#27272a",
+    borderRadius: 12,
+    paddingHorizontal: 16,
   },
 });

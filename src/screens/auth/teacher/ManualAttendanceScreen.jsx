@@ -78,47 +78,40 @@ export default function ManualAttendanceScreen({ route, navigation }) {
   const loadStudents = useCallback(async () => {
     if (!lopId) return;
     setLoading(true);
+    try {
+      // 1) lấy danh sách SV của lớp qua RPC (bỏ qua RLS phức tạp)
+      const { data, error } = await supabase.rpc("get_class_students", {
+        p_lop_id: lopId,
+      });
+      if (error) throw error;
 
-    // 1) lấy danh sách người dùng đã đăng ký lớp
-    const { data: enrolls, error } = await supabase
-      .from("dangky")
-      .select("sinh_vien_id")
-      .eq("lop_id", lopId);
+      const base = (data ?? []).map((r) => ({
+        id: r.sinh_vien_id,
+        ho_ten: r.ho_ten ?? "(Chưa có tên)",
+        ma_sinh_vien: r.ma_sinh_vien ?? "",
+      }));
+      setStudents(base);
 
-    if (error) {
+      // 2) nếu đang ở một buổi học cụ thể -> pre-check ai đã điểm danh
+      if (sessionId) {
+        const { data: att, error: e2 } = await supabase.rpc(
+          "get_session_attendance",
+          { p_buoihoc_id: sessionId }
+        );
+        if (e2) throw e2;
+
+        const preset = {};
+        (att ?? []).forEach((r) => {
+          if (r.checked) preset[r.sinh_vien_id] = true;
+        });
+        setChecked(preset);
+      }
+    } catch (e) {
+      Alert.alert("Lỗi", e?.message || String(e));
+    } finally {
       setLoading(false);
-      Alert.alert("Lỗi", error.message);
-      return;
     }
-    const ids = (enrolls ?? []).map((e) => e.sinh_vien_id);
-
-    if (ids.length === 0) {
-      setStudents([]);
-      setLoading(false);
-      return;
-    }
-
-    // 2) lấy hồ sơ hiển thị
-    const { data: profiles, error: e2 } = await supabase
-      .from("hoso")
-      .select("nguoi_dung_id, ho_ten, ma_sinh_vien")
-      .in("nguoi_dung_id", ids)
-      .order("ho_ten", { ascending: true });
-
-    setLoading(false);
-    if (e2) {
-      Alert.alert("Lỗi", e2.message);
-      return;
-    }
-
-    setStudents(
-      (profiles ?? []).map((p) => ({
-        id: p.nguoi_dung_id,
-        ho_ten: p.ho_ten ?? "(Chưa có tên)",
-        ma_sinh_vien: p.ma_sinh_vien ?? "",
-      }))
-    );
-  }, [lopId]);
+  }, [lopId, sessionId]);
 
   // Nạp danh sách SV khi có lopId (dù đến từ nav hay tra từ buoihoc)
   useEffect(() => {

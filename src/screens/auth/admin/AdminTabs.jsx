@@ -1,5 +1,6 @@
 import React from "react";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import DashboardScreen from "./DashboardScreen";
 import UsersScreen from "./UsersScreen";
 import CreateUserScreen from "./CreateUserScreen";
@@ -10,15 +11,31 @@ import SubjectsScreen from "./SubjectsScreen"; // <-- IMPORT MÀN HÌNH MỚI
 const Tab = createBottomTabNavigator();
 
 export default function AdminTabs() {
+  const iconMap = {
+    Dashboard: "speedometer-outline",
+    Users: "people-outline",
+    CreateUser: "person-add-outline",
+    Subjects: "book-outline",
+    Classes: "school-outline",
+    Sessions: "calendar-outline",
+  };
+
   return (
     <Tab.Navigator
-      screenOptions={{
+      screenOptions={({ route }) => ({
         headerStyle: { backgroundColor: "#09090b" },
         headerTintColor: "#fff",
         tabBarStyle: { backgroundColor: "#0a0a0a", borderTopColor: "#18181b" },
         tabBarActiveTintColor: "#a78bfa",
         tabBarInactiveTintColor: "#9ca3af",
-      }}
+        tabBarIcon: ({ color, size }) => (
+          <Ionicons
+            name={iconMap[route.name] ?? "ellipse-outline"}
+            size={size}
+            color={color}
+          />
+        ),
+      })}
     >
       <Tab.Screen
         name="Dashboard"

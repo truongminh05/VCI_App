@@ -1,4 +1,4 @@
-import React, {
+﻿import React, {
   useCallback,
   useEffect,
   useMemo,
@@ -11,7 +11,6 @@ import {
   FlatList,
   ActivityIndicator,
   Alert,
-  TouchableOpacity,
   RefreshControl,
   StyleSheet,
   Platform,
@@ -22,12 +21,13 @@ import Section from "../../../components/Section";
 import Card from "../../../components/Card";
 import Button from "../../../components/Button";
 import { ClassPicker } from "../../../components/ClassPicker";
+import { useFocusEffect } from "@react-navigation/native";
 
 const PAGE_SIZE = 20;
-const DAYS_BACK = 120; // lọc 120 ngày gần đây
+const DAYS_BACK = 120; // lá»c 120 ngÃ y gáº§n Ä‘Ã¢y
 
 export default function MyClassesScreen({ route, navigation }) {
-  // lớp nhận từ màn trước (nếu có)
+  // lá»›p nháº­n tá»« mÃ n trÆ°á»›c (náº¿u cÃ³)
   const lopFromRoute = route?.params?.lop ?? null;
 
   const [lop, setLop] = useState(lopFromRoute);
@@ -38,7 +38,7 @@ export default function MyClassesScreen({ route, navigation }) {
   const [refreshing, setRefreshing] = useState(false);
   const abortRef = useRef(null);
 
-  // nếu chỉ có id mà thiếu tên lớp -> lấy tên
+  // náº¿u chá»‰ cÃ³ id mÃ  thiáº¿u tÃªn lá»›p -> láº¥y tÃªn
   useEffect(() => {
     let active = true;
     (async () => {
@@ -56,8 +56,13 @@ export default function MyClassesScreen({ route, navigation }) {
     };
   }, [lop?.id]);
 
-  const nowFrom = useMemo(
-    () => new Date(Date.now() - DAYS_BACK * 24 * 3600 * 1000).toISOString(),
+  const now = Date.now();
+  const pastISO = useMemo(
+    () => new Date(now - DAYS_BACK * 24 * 3600 * 1000).toISOString(),
+    [lop?.id]
+  );
+  const futureISO = useMemo(
+    () => new Date(now + DAYS_BACK * 24 * 3600 * 1000).toISOString(),
     [lop?.id]
   );
 
@@ -74,7 +79,7 @@ export default function MyClassesScreen({ route, navigation }) {
         setItems([]);
         return;
       }
-      // huỷ request cũ nếu đang chạy
+      // huá»· request cÅ© náº¿u Ä‘ang cháº¡y
       cancelInFlight();
       const ctrl = new AbortController();
       abortRef.current = ctrl;
@@ -88,28 +93,26 @@ export default function MyClassesScreen({ route, navigation }) {
         .from("buoihoc")
         .select(
           `
-          id,
-          thoi_gian_bat_dau,
-          thoi_gian_ket_thuc,
-          monhoc:monhoc_id ( id, ma_mon, ten_mon )
-        `,
-          { count: null }
+    id, lop_id, monhoc_id,
+    thoi_gian_bat_dau, thoi_gian_ket_thuc,
+    monhoc:monhoc_id ( ma_mon, ten_mon )
+  `
         )
         .eq("lop_id", lop.id)
         .order("thoi_gian_bat_dau", { ascending: true })
         .range(from, to)
         .abortSignal(ctrl.signal);
 
-      // lọc theo thời gian (có thể bỏ nếu muốn)
-      q = q.gte("thoi_gian_bat_dau", nowFrom);
+      // lá»c theo thá»i gian (cÃ³ thá»ƒ bá» náº¿u muá»‘n)
+      // q = q.gte("thoi_gian_bat_dau", nowFrom);
 
       const { data, error } = await q;
 
-      // nếu đã bị huỷ, bỏ qua yên lặng
+      // náº¿u Ä‘Ã£ bá»‹ huá»·, bá» qua yÃªn láº·ng
       if (ctrl.signal.aborted) return;
 
       if (error) {
-        // BỎ QUA lỗi Abort
+        // Bá»Ž QUA lá»—i Abort
         const msg = String(error.message || "");
         if (error.name === "AbortError" || /abort/i.test(msg)) {
           return;
@@ -132,16 +135,25 @@ export default function MyClassesScreen({ route, navigation }) {
       setLoading(false);
       setRefreshing(false);
     },
-    [lop?.id, nowFrom, cancelInFlight]
+    [lop?.id, cancelInFlight]
   );
 
-  // khi đổi lớp -> tải lại
+  useFocusEffect(
+    useCallback(() => {
+      if (lop?.id) {
+        loadPage(0);
+      }
+      return cancelInFlight;
+    }, [lop?.id, loadPage, cancelInFlight])
+  );
+
+  // khi Ä‘á»•i lá»›p -> táº£i láº¡i
   useEffect(() => {
     setItems([]);
     setPage(0);
     if (lop?.id) loadPage(0);
     return cancelInFlight;
-  }, [lop?.id]);
+  }, [lop?.id, loadPage, cancelInFlight]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -153,23 +165,35 @@ export default function MyClassesScreen({ route, navigation }) {
     loadPage(page + 1);
   }, [page, loading, lop?.id, loadPage]);
 
-  // điều hướng
+  // Ä‘iá»u hÆ°á»›ng
   const goQR = useCallback(
     (session) => {
       navigation.navigate("AttendanceSession", {
         buoihoc_id: session.id,
-        headerTitle: `${session.subject || ""} · ${formatLocal(session.start)}`,
+        lop_id: lop?.id ?? null,
+        ten_lop: lopName ?? "",
       });
     },
-    [navigation]
+    [navigation, lop?.id, lopName]
+  );
+
+  const goList = useCallback(
+    (session) => {
+      navigation.navigate("AttendanceList", {
+        buoihoc_id: session.id,
+        lop_id: lop?.id ?? null,
+        ten_lop: lopName ?? "",
+      });
+    },
+    [navigation, lop?.id, lopName]
   );
 
   const goManual = useCallback(
     (session) => {
       navigation.navigate("ManualAttendance", {
         buoihoc_id: session.id,
-        lop_id: lop?.id,
-        ten_lop: lopName,
+        lop_id: lop?.id ?? null,
+        ten_lop: lopName ?? "",
       });
     },
     [navigation, lop?.id, lopName]
@@ -177,26 +201,31 @@ export default function MyClassesScreen({ route, navigation }) {
 
   const renderItem = ({ item }) => (
     <Card className="mb-3">
-      <Text style={styles.title}>{item.subject || "(Chưa có tên môn)"}</Text>
+      <Text style={styles.title}>{item.subject || "(Chưa có môn)"}</Text>
       <Text style={styles.sub}>{item.subjectCode}</Text>
-      <Text style={styles.row}>Bắt đầu: {formatLocal(item.start)}</Text>
-      <Text style={styles.row}>Kết thúc: {formatLocal(item.end)}</Text>
+      <Text style={styles.row}>Bắt đầu sau: {formatLocal(item.start)}</Text>
+      <Text style={styles.row}>Kết thúc sau: {formatLocal(item.end)}</Text>
 
       <View style={styles.rowBtns}>
         <Button title="QR" onPress={() => goQR(item)} />
-        <View style={{ width: 10 }} />
+        {/* <View style={{ width: 10 }} /> */}
+        {/* <Button title="Danh sach" onPress={() => goList(item)} /> */}
+        <View style={{ width: 5 }} />
         <Button title="Thủ công" onPress={() => goManual(item)} />
       </View>
     </Card>
   );
 
-  // Header để toàn màn hình cuộn (Section + ClassPicker)
+  // Header Ä‘á»ƒ toÃ n mÃ n hÃ¬nh cuá»™n (Section + ClassPicker)
   const renderHeader = () => (
     <KeyboardAvoidingView
       behavior={Platform.OS === "ios" ? "padding" : undefined}
       keyboardVerticalOffset={Platform.OS === "ios" ? 64 : 0}
     >
-      <Section title="Lớp học" subtitle={lopName || "Chọn lớp để xem buổi"} />
+      <Section
+        title="Lớp học"
+        subtitle={lopName || "Chọn lớp để xem buổi học"}
+      />
       {!lop?.id ? (
         <View style={{ paddingHorizontal: 16 }}>
           <ClassPicker
@@ -238,7 +267,7 @@ export default function MyClassesScreen({ route, navigation }) {
               <Text
                 style={{ color: "#9aa0a6", marginTop: 6, textAlign: "center" }}
               >
-                Gợi ý: bỏ lọc thời gian hoặc kiểm tra RLS/dữ liệu bảng{" "}
+                Bỏ lọc thời gian hoặc kiểm tra RLS/dữ liệu bảng{" "}
                 <Text style={{ color: "#61dafb" }}>buoihoc</Text>.
               </Text>
             </View>

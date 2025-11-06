@@ -1,6 +1,7 @@
 import React from "react";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { useAuth } from "../contexts/AuthContext";
 import LoginScreen from "../screens/auth/LoginScreen";
 
@@ -12,25 +13,39 @@ import HistoryScreen from "../screens/student/HistoryScreen";
 // Teacher
 import MyClassesScreen from "../screens/auth/teacher/MyClassesScreen";
 import AttendanceSessionScreen from "../screens/auth/teacher/AttendanceSessionScreen";
+import AttendanceSessionListScreen from "../screens/auth/teacher/AttendanceSessionTabs";
 import ManualAttendanceScreen from "../screens/auth/teacher/ManualAttendanceScreen";
 
 // Admin
 import AdminTabs from "../screens/auth/admin/AdminTabs";
-import EditUserScreen from "../screens/auth/admin/EditUserScreen"; // <-- Import màn hình
+import EditUserScreen from "../screens/auth/admin/EditUserScreen";
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
 function StudentTabs() {
+  const iconMap = {
+    Schedule: "calendar-outline",
+    ScanQR: "qr-code-outline",
+    History: "time-outline",
+  };
+
   return (
     <Tab.Navigator
-      screenOptions={{
+      screenOptions={({ route }) => ({
         headerStyle: { backgroundColor: "#09090b" },
         headerTintColor: "#fff",
         tabBarStyle: { backgroundColor: "#0a0a0a", borderTopColor: "#18181b" },
         tabBarActiveTintColor: "#a78bfa",
         tabBarInactiveTintColor: "#9ca3af",
-      }}
+        tabBarIcon: ({ color, size }) => (
+          <Ionicons
+            name={iconMap[route.name] ?? "ellipse-outline"}
+            size={size}
+            color={color}
+          />
+        ),
+      })}
     >
       <Tab.Screen
         name="Schedule"
@@ -52,15 +67,29 @@ function StudentTabs() {
 }
 
 function TeacherTabs() {
+  const iconMap = {
+    MyClasses: "school-outline",
+    AttendanceSession: "qr-code-outline",
+    AttendanceList: "list-outline",
+    ManualAttendance: "clipboard-outline",
+  };
+
   return (
     <Tab.Navigator
-      screenOptions={{
+      screenOptions={({ route }) => ({
         headerStyle: { backgroundColor: "#09090b" },
         headerTintColor: "#fff",
         tabBarStyle: { backgroundColor: "#0a0a0a", borderTopColor: "#18181b" },
         tabBarActiveTintColor: "#a78bfa",
         tabBarInactiveTintColor: "#9ca3af",
-      }}
+        tabBarIcon: ({ color, size }) => (
+          <Ionicons
+            name={iconMap[route.name] ?? "ellipse-outline"}
+            size={size}
+            color={color}
+          />
+        ),
+      })}
     >
       <Tab.Screen
         name="MyClasses"
@@ -73,6 +102,11 @@ function TeacherTabs() {
         options={{ title: "Phiên điểm danh" }}
       />
       <Tab.Screen
+        name="AttendanceList"
+        component={AttendanceSessionListScreen}
+        options={{ title: "Danh sách" }}
+      />
+      <Tab.Screen
         name="ManualAttendance"
         component={ManualAttendanceScreen}
         options={{ title: "Thủ công" }}
@@ -80,8 +114,6 @@ function TeacherTabs() {
     </Tab.Navigator>
   );
 }
-
-// KHÔNG CẦN AdminNavigator riêng nữa
 
 export default function RootNavigator() {
   const { user, role } = useAuth();
@@ -113,7 +145,6 @@ export default function RootNavigator() {
           options={{ headerShown: false }}
         />
       ) : role === "quantri" ? (
-        // THAY ĐỔI: Đăng ký các màn hình admin trực tiếp tại đây
         <>
           <Stack.Screen
             name="AdminRoot"

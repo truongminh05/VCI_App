@@ -1,27 +1,36 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { View, Text, Alert } from "react-native";
 import QRCode from "react-native-qrcode-svg";
 import Card from "../../../components/Card";
 import { supabase } from "../../../lib/supabase";
+import { computeWindowStatus } from "../../../utils/attendanceWindow";
 
 function fmt(iso) {
+  if (!iso) return "";
   try {
     return new Date(iso).toLocaleString();
   } catch {
-    return iso ?? "";
+    return String(iso);
   }
 }
 
 export default function AttendanceSessionScreen({ route }) {
   const buoihoc_id = route?.params?.buoihoc_id;
-  const [info, setInfo] = useState(null); // buổi học
-  const [payload, setPayload] = useState(null); // {sid, slot, sig}
-  const [status, setStatus] = useState("idle"); // idle|running|closed|ended
-  const tickRef = useRef(null);
+  const [info, setInfo] = useState(null);
+  const [payload, setPayload] = useState(null); // { sid, slot, sig, phase }
+  const [status, setStatus] = useState("idle"); // idle|running|closed|ended|invalid
   const [tick, setTick] = useState(0);
+  const tickRef = useRef(null);
+  const pollRef = useRef(null);
 
-  // 1) Load thông tin buổi học
+  // Load buổi học
   useEffect(() => {
     (async () => {
       const { data, error } = await supabase
@@ -36,75 +45,106 @@ export default function AttendanceSessionScreen({ route }) {
     })();
   }, [buoihoc_id]);
 
-  // 2) Tick mỗi giây để kiểm tra thời gian
+  // Tick mỗi giây
   useEffect(() => {
     tickRef.current = setInterval(() => setTick((x) => x + 1), 1000);
     return () => clearInterval(tickRef.current);
   }, []);
 
-  const now = new Date();
-
-  const inLateWindow = useMemo(() => {
-    if (!info) return false;
-    return now >= new Date(info.mo_tu) && now <= new Date(info.dong_den);
-  }, [info, tick]);
-
   const ended = useMemo(() => {
-    if (!info) return false;
-    return now > new Date(info.thoi_gian_ket_thuc);
+    if (!info?.thoi_gian_ket_thuc) return false;
+    return Date.now() > new Date(info.thoi_gian_ket_thuc).getTime();
   }, [info, tick]);
 
-  // 3) Lấy QR khi cần
-  useEffect(() => {
+  // Rút onTimeMin & lateMin từ dữ liệu Admin đã lưu
+  const onTimeMin = useMemo(() => {
+    if (!info?.thoi_gian_bat_dau || !info?.mo_tu) return null;
+    const start = new Date(info.thoi_gian_bat_dau).getTime();
+    const moTu = new Date(info.mo_tu).getTime();
+    const diff = Math.round((moTu - start) / 60000);
+    return diff >= 0 ? diff : null;
+  }, [info]);
+
+  const lateMin = useMemo(() => {
+    if (Number.isFinite(info?.tre_sau_phut)) return info.tre_sau_phut;
+    if (info?.dong_den && info?.mo_tu) {
+      const dd = new Date(info.dong_den).getTime();
+      const mt = new Date(info.mo_tu).getTime();
+      const diff = Math.round((dd - mt) / 60000);
+      return diff >= 0 ? diff : null;
+    }
+    return null;
+  }, [info]);
+
+  const phaseObj = useMemo(() => {
+    if (!info) return { phase: "before" };
+    return computeWindowStatus(
+      {
+        startISO: info.thoi_gian_bat_dau,
+        onTimeMin,
+        lateMin,
+      },
+      Date.now()
+    );
+  }, [info, onTimeMin, lateMin, tick]);
+  const phase = phaseObj.phase;
+
+  const runSignQr = useCallback(async () => {
     if (!info) return;
 
-    const run = async () => {
-      if (ended) {
-        setStatus("ended");
-        setPayload(null);
-        return;
-      }
-      if (!inLateWindow) {
-        setStatus("closed");
-        setPayload(null);
-        return;
-      }
+    if (ended) {
+      setStatus("ended");
+      setPayload(null);
+      return;
+    }
 
-      setStatus("running");
+    // nếu thiếu cấu hình hoặc chưa đến giờ / đã hết giờ
+    if (
+      !Number.isFinite(onTimeMin) ||
+      !Number.isFinite(lateMin) ||
+      phase === "before" ||
+      phase === "closed"
+    ) {
+      setStatus(
+        phase === "before" ? "idle" : phase === "closed" ? "closed" : "invalid"
+      );
+      setPayload(null);
+      return;
+    }
 
-      // Tính slot theo khoảng thời gian QR
-      const period = info.qr_khoang_giay || 20;
-      const slot = Math.floor(Date.now() / 1000 / period);
+    setStatus("running");
+    const period = info.qr_khoang_giay || 20;
+    const slot = Math.floor(Date.now() / 1000 / period);
 
-      // ✅ GỌI RPC (bạn đã bỏ mất đoạn này)
-      const { data, error } = await supabase.rpc("sign_qr", {
-        p_buoihoc_id: info.id,
-        p_slot: slot,
-      });
+    const { data, error } = await supabase.rpc("sign_qr", {
+      p_buoihoc_id: info.id,
+      p_slot: slot,
+    });
+    if (error) {
+      console.log("sign_qr error", error);
+      setPayload(null);
+      return;
+    }
 
-      if (error) {
-        console.log("sign_qr error", error);
-        // Giữ status nhưng không set payload để màn vẫn “Đang chờ…”
-        return;
-      }
+    if (data?.ok) {
+      setPayload({ sid: data.sid, slot: data.slot, sig: data.sig, phase }); // "ontime" | "late"
+    } else {
+      console.log("sign_qr not ok", data);
+      setPayload(null);
+      setStatus(data?.error === "WINDOW_CLOSED" ? "closed" : "idle");
+    }
+  }, [info, ended, onTimeMin, lateMin, phase]);
 
-      if (data?.ok) {
-        setPayload({ sid: data.sid, slot: data.slot, sig: data.sig });
-      } else {
-        // SERVER trả về WINDOW_CLOSED / SESSION_NOT_FOUND / v.v.
-        console.log("sign_qr not ok", data);
-        setPayload(null);
-        setStatus(data?.error === "WINDOW_CLOSED" ? "closed" : "idle");
-      }
+  useEffect(() => {
+    if (!info) return;
+    runSignQr();
+    if (pollRef.current) clearInterval(pollRef.current);
+    const period = info.qr_khoang_giay || 20;
+    pollRef.current = setInterval(runSignQr, period * 1000);
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
     };
-
-    // gọi ngay lần đầu
-    run();
-
-    // gọi lặp theo chu kỳ QR
-    const iv = setInterval(run, (info.qr_khoang_giay || 20) * 1000);
-    return () => clearInterval(iv);
-  }, [info, inLateWindow, ended]);
+  }, [info, runSignQr]);
 
   return (
     <SafeAreaView className="bg-black flex-1">
@@ -123,8 +163,21 @@ export default function AttendanceSessionScreen({ route }) {
                 Kết thúc: {fmt(info.thoi_gian_ket_thuc)}
               </Text>
               <Text className="text-zinc-400">
-                Cửa QR: {fmt(info.mo_tu)} → {fmt(info.dong_den)} (trễ{" "}
-                {info.tre_sau_phut}’)
+                Đúng giờ: {fmt(info.thoi_gian_bat_dau)} → {fmt(info.mo_tu)} (
+                {onTimeMin ?? "—"}’)
+              </Text>
+              <Text className="text-zinc-400">
+                Trễ: {fmt(info.mo_tu)} → {fmt(info.dong_den)} ({lateMin ?? "—"}
+                ’)
+              </Text>
+              <Text className="text-zinc-400 mt-2">
+                {phase === "before" && "⏳ Chưa đến giờ mở QR"}
+                {phase === "ontime" &&
+                  `✅ Đúng giờ (đến ${fmt(phaseObj.onEnd)})`}
+                {phase === "late" &&
+                  `⚠️ Trễ giờ (đến ${fmt(phaseObj.lateEnd)})`}
+                {phase === "closed" && "❌ Đã đóng điểm danh"}
+                {phase === "invalid" && "⚠️ Thiếu cấu hình thời gian"}
               </Text>
             </>
           )}
@@ -137,7 +190,11 @@ export default function AttendanceSessionScreen({ route }) {
             </Text>
           ) : status === "closed" ? (
             <Text className="text-yellow-400 font-semibold">
-              Cửa điểm danh đã đóng (hết thời gian trễ).
+              Cửa điểm danh đã đóng.
+            </Text>
+          ) : status === "invalid" ? (
+            <Text className="text-yellow-400">
+              Thiếu cấu hình (mo_tu/dong_den/tre_sau_phut).
             </Text>
           ) : payload ? (
             <View style={{ alignItems: "center" }}>
@@ -147,7 +204,8 @@ export default function AttendanceSessionScreen({ route }) {
                 quietZone={12}
               />
               <Text className="text-zinc-400 mt-3">
-                QR đổi mỗi {info?.qr_khoang_giay || 20}s — slot: {payload.slot}
+                {phase === "ontime" ? "Đang ở pha ĐÚNG GIỜ" : "Đang ở pha TRỄ"}{" "}
+                · đổi mỗi {info?.qr_khoang_giay || 20}s — slot: {payload.slot}
               </Text>
             </View>
           ) : (
