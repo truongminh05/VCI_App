@@ -7,7 +7,7 @@ import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
 
 const STATUS_ON_TIME = "dung_gio";
-const STATUS_LATE = "tre";
+const STATUS_LATE = "tre_gio";
 
 export default function ScanQRScreen() {
   const { user } = useAuth();
@@ -46,12 +46,17 @@ export default function ScanQRScreen() {
         throw new Error("Mã QR không hợp lệ hoặc đã hết hạn (thiếu phase).");
       }
       const statusVal = phase === "ontime" ? STATUS_ON_TIME : STATUS_LATE;
+
       // Ghi nhận điểm danh (giả định RPC đã xác thực chữ ký/số slot trong DB)
+      // 🚨 ĐÃ CHỈNH SỬA: Thêm 3 tham số p_lat, p_lon, p_thietbi_id
       const { error } = await supabase.rpc("insert_diemdanh_qr", {
         p_buoihoc: sid,
         p_trang_thai: statusVal, // "dung_gio" | "tre_gio"
-        // nếu hàm nhận mặc định auth.uid() thì không cần truyền p_sinhvien
+        p_lat: null, // Tham số thêm mới, giá trị null
+        p_lon: null, // Tham số thêm mới, giá trị null
+        p_thietbi_id: "mobile-app", // Tham số thêm mới, giá trị cố định
       });
+
       if (error) throw error;
 
       Alert.alert(

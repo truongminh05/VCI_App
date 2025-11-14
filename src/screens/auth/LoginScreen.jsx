@@ -1,3 +1,4 @@
+// src/screens/auth/LoginScreen.jsx
 import React, { useState } from "react";
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
@@ -15,7 +16,6 @@ import {
 import Ionicons from "@expo/vector-icons/Ionicons";
 import Button from "../../components/Button";
 import Card from "../../components/Card";
-import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
 
 export default function LoginScreen() {
@@ -24,10 +24,9 @@ export default function LoginScreen() {
   const [asTeacher, setAsTeacher] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
-  const { refreshHoso } = useAuth();
-  const { width } = useWindowDimensions();
 
-  // logo tự co theo bề ngang màn (tối đa 220)
+  const { signIn, refreshHoso } = useAuth();
+  const { width } = useWindowDimensions();
   const logoSize = Math.min(width * 0.45, 220);
 
   const onLogin = async () => {
@@ -36,19 +35,24 @@ export default function LoginScreen() {
         Alert.alert("Thiếu thông tin", "Nhập email & mật khẩu");
         return;
       }
+      console.log("[Login] click with:", email);
       setBusy(true);
 
-      const { error } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password,
-      });
-      if (error) throw error;
+      // 1) Đăng nhập (đã có timeout mềm trong AuthContext.signIn)
+      const { ok, error } = await signIn(email.trim(), password);
+      if (!ok) throw error || new Error("Đăng nhập thất bại.");
 
-      await refreshHoso();
+      // 2) KHÔNG chặn UI: tải hồ sơ ở nền (không await)
+      //    Nếu RPC chậm, UI vẫn chuyển nhánh theo session.
+      refreshHoso().catch(() => {});
+
+      // 3) Có thể báo nhẹ (tùy thích)
+      // Alert.alert("Thành công", "Đã đăng nhập! Đang tải hồ sơ…");
     } catch (e) {
       const msg = e?.message ?? String(e);
       Alert.alert("Đăng nhập thất bại", msg);
     } finally {
+      // luôn nhả trạng thái nút
       setBusy(false);
     }
   };
@@ -60,7 +64,6 @@ export default function LoginScreen() {
         contentContainerStyle={styles.container}
         keyboardShouldPersistTaps="handled"
       >
-        {/* LOGO + BRAND */}
         <View style={styles.logoWrap}>
           <Image
             source={require("../../../assets/logo-vci.png")}
@@ -76,7 +79,6 @@ export default function LoginScreen() {
           </Text>
         </View>
 
-        {/* FORM */}
         <View style={{ width: "100%", paddingHorizontal: 24 }}>
           <Card>
             <Text className="text-zinc-400 mb-2">Email</Text>

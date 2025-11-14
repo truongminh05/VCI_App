@@ -1,4 +1,5 @@
-﻿import React, {
+﻿// screens/attendance/MyClassesScreen.jsx
+import React, {
   useCallback,
   useEffect,
   useMemo,
@@ -21,13 +22,11 @@ import Section from "../../../components/Section";
 import Card from "../../../components/Card";
 import Button from "../../../components/Button";
 import { ClassPicker } from "../../../components/ClassPicker";
-import { useFocusEffect } from "@react-navigation/native";
 
 const PAGE_SIZE = 20;
-const DAYS_BACK = 120; // lá»c 120 ngÃ y gáº§n Ä‘Ã¢y
+const DAYS_BACK = 365;
 
 export default function MyClassesScreen({ route, navigation }) {
-  // lá»›p nháº­n tá»« mÃ n trÆ°á»›c (náº¿u cÃ³)
   const lopFromRoute = route?.params?.lop ?? null;
 
   const [lop, setLop] = useState(lopFromRoute);
@@ -36,9 +35,11 @@ export default function MyClassesScreen({ route, navigation }) {
   const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const abortRef = useRef(null);
+  const onEndBusyRef = useRef(false); // throttle onEndReached
 
-  // náº¿u chá»‰ cÃ³ id mÃ  thiáº¿u tÃªn lá»›p -> láº¥y tÃªn
+  // gắn tên lớp nếu chỉ có id
   useEffect(() => {
     let active = true;
     (async () => {
@@ -77,109 +78,101 @@ export default function MyClassesScreen({ route, navigation }) {
     async (p = 0) => {
       if (!lop?.id) {
         setItems([]);
+        setHasMore(true);
         return;
       }
-      // huá»· request cÅ© náº¿u Ä‘ang cháº¡y
       cancelInFlight();
       const ctrl = new AbortController();
       abortRef.current = ctrl;
 
-      const from = p * PAGE_SIZE;
-      const to = from + PAGE_SIZE - 1;
+      const offset = p * PAGE_SIZE;
+      setLoading(true); // ✅ luôn bật loading cho mọi trang
 
-      if (p === 0) setLoading(true);
+      try {
+        console.log("[GV] rpc get_buoihoc_for_gv", {
+          p_lop_id: lop.id,
+          p_from: pastISO,
+          p_to: futureISO,
+          p_limit: PAGE_SIZE,
+          p_offset: offset,
+        });
 
-      let q = supabase
-        .from("buoihoc")
-        .select(
-          `
-    id, lop_id, monhoc_id,
-    thoi_gian_bat_dau, thoi_gian_ket_thuc,
-    monhoc:monhoc_id ( ma_mon, ten_mon )
-  `
-        )
-        .eq("lop_id", lop.id)
-        .order("thoi_gian_bat_dau", { ascending: true })
-        .range(from, to)
-        .abortSignal(ctrl.signal);
+        const { data, error } = await supabase
+          .rpc("get_buoihoc_for_gv", {
+            p_lop_id: lop.id,
+            p_from: pastISO,
+            p_to: futureISO,
+            p_limit: PAGE_SIZE,
+            p_offset: offset,
+          })
+          .abortSignal(ctrl.signal);
 
-      // lá»c theo thá»i gian (cÃ³ thá»ƒ bá» náº¿u muá»‘n)
-      // q = q.gte("thoi_gian_bat_dau", nowFrom);
+        if (ctrl.signal.aborted) return;
 
-      const { data, error } = await q;
+        if (error) throw error;
 
-      // náº¿u Ä‘Ã£ bá»‹ huá»·, bá» qua yÃªn láº·ng
-      if (ctrl.signal.aborted) return;
+        const rows = (data ?? []).map((b) => ({
+          id: b.id,
+          start: b.thoi_gian_bat_dau,
+          end: b.thoi_gian_ket_thuc,
+          subject: b.monhoc_ten || "",
+        }));
 
-      if (error) {
-        // Bá»Ž QUA lá»—i Abort
-        const msg = String(error.message || "");
-        if (error.name === "AbortError" || /abort/i.test(msg)) {
-          return;
+        console.log("[GV] rpc result len:", rows.length, "page:", p);
+
+        setPage(p);
+        setItems((prev) => (p === 0 ? rows : [...prev, ...rows]));
+
+        // ✅ nếu ít hơn PAGE_SIZE thì hết dữ liệu
+        setHasMore(rows.length === PAGE_SIZE);
+      } catch (e) {
+        if (!(e?.name === "AbortError")) {
+          const raw = e?.message || String(e);
+          console.log("[GV] rpc error:", raw);
+          let friendly = raw;
+          if (/FORBIDDEN/i.test(raw)) {
+            friendly =
+              "Bạn chưa được phân công lớp/môn này hoặc chưa là giảng viên của lớp. Hãy kiểm tra bảng phancong_lop/giangday hoặc quyền tạo buổi (tao_boi/giang_vien_id).";
+          } else if (/NOT_AUTHENTICATED/i.test(raw)) {
+            friendly = "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.";
+          }
+          Alert.alert("Lỗi tải buổi học", friendly);
         }
-        Alert.alert("Lỗi tải buổi học", msg);
+      } finally {
         setLoading(false);
         setRefreshing(false);
-        return;
+        onEndBusyRef.current = false; // mở lại onEndReached
       }
-
-      const rows = (data ?? []).map((bh) => ({
-        id: bh.id,
-        start: bh.thoi_gian_bat_dau,
-        end: bh.thoi_gian_ket_thuc,
-        subject: bh?.monhoc?.ten_mon ?? "",
-        subjectCode: bh?.monhoc?.ma_mon ?? "",
-      }));
-      setPage(p);
-      setItems((prev) => (p === 0 ? rows : [...prev, ...rows]));
-      setLoading(false);
-      setRefreshing(false);
     },
-    [lop?.id, cancelInFlight]
+    [lop?.id, pastISO, futureISO, cancelInFlight]
   );
 
-  useFocusEffect(
-    useCallback(() => {
-      if (lop?.id) {
-        loadPage(0);
-      }
-      return cancelInFlight;
-    }, [lop?.id, loadPage, cancelInFlight])
-  );
-
-  // khi Ä‘á»•i lá»›p -> táº£i láº¡i
+  // ✅ chỉ 1 chỗ gọi lần đầu & khi đổi lớp
   useEffect(() => {
     setItems([]);
     setPage(0);
+    setHasMore(true);
     if (lop?.id) loadPage(0);
     return cancelInFlight;
   }, [lop?.id, loadPage, cancelInFlight]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
+    setHasMore(true);
     loadPage(0);
   }, [loadPage]);
 
   const onEndReached = useCallback(() => {
-    if (loading || !lop?.id) return;
+    if (onEndBusyRef.current) return;
+    if (loading || !lop?.id || !hasMore) return;
+    onEndBusyRef.current = true; // throttle 1 lần
     loadPage(page + 1);
-  }, [page, loading, lop?.id, loadPage]);
+  }, [page, loading, lop?.id, hasMore, loadPage]);
 
-  // Ä‘iá»u hÆ°á»›ng
   const goQR = useCallback(
     (session) => {
+      if (!session?.id) return;
       navigation.navigate("AttendanceSession", {
-        buoihoc_id: session.id,
-        lop_id: lop?.id ?? null,
-        ten_lop: lopName ?? "",
-      });
-    },
-    [navigation, lop?.id, lopName]
-  );
-
-  const goList = useCallback(
-    (session) => {
-      navigation.navigate("AttendanceList", {
         buoihoc_id: session.id,
         lop_id: lop?.id ?? null,
         ten_lop: lopName ?? "",
@@ -202,21 +195,16 @@ export default function MyClassesScreen({ route, navigation }) {
   const renderItem = ({ item }) => (
     <Card className="mb-3">
       <Text style={styles.title}>{item.subject || "(Chưa có môn)"}</Text>
-      <Text style={styles.sub}>{item.subjectCode}</Text>
-      <Text style={styles.row}>Bắt đầu sau: {formatLocal(item.start)}</Text>
-      <Text style={styles.row}>Kết thúc sau: {formatLocal(item.end)}</Text>
-
+      <Text style={styles.row}>Bắt đầu: {formatLocal(item.start)}</Text>
+      <Text style={styles.row}>Kết thúc: {formatLocal(item.end)}</Text>
       <View style={styles.rowBtns}>
-        <Button title="QR" onPress={() => goQR(item)} />
-        {/* <View style={{ width: 10 }} /> */}
-        {/* <Button title="Danh sach" onPress={() => goList(item)} /> */}
-        <View style={{ width: 5 }} />
+        <Button title="Mở QR" onPress={() => goQR(item)} />
+        <View style={{ width: 8 }} />
         <Button title="Thủ công" onPress={() => goManual(item)} />
       </View>
     </Card>
   );
 
-  // Header Ä‘á»ƒ toÃ n mÃ n hÃ¬nh cuá»™n (Section + ClassPicker)
   const renderHeader = () => (
     <KeyboardAvoidingView
       behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -237,7 +225,6 @@ export default function MyClassesScreen({ route, navigation }) {
           />
         </View>
       ) : null}
-
       {loading && items.length === 0 ? (
         <View style={styles.center}>
           <ActivityIndicator />
@@ -258,7 +245,7 @@ export default function MyClassesScreen({ route, navigation }) {
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
-        onEndReachedThreshold={0.3}
+        onEndReachedThreshold={0.4}
         onEndReached={onEndReached}
         ListEmptyComponent={
           !loading && (
@@ -267,13 +254,21 @@ export default function MyClassesScreen({ route, navigation }) {
               <Text
                 style={{ color: "#9aa0a6", marginTop: 6, textAlign: "center" }}
               >
-                Bỏ lọc thời gian hoặc kiểm tra RLS/dữ liệu bảng{" "}
-                <Text style={{ color: "#61dafb" }}>buoihoc</Text>.
+                Đang lọc ±365 ngày. Kiểm tra phân công (phancong_lop/giangday) &
+                dữ liệu buoihoc.
               </Text>
             </View>
           )
         }
-        ListFooterComponent={<View style={{ height: 12 }} />}
+        ListFooterComponent={
+          loading && items.length > 0 ? (
+            <View style={{ paddingVertical: 12 }}>
+              <ActivityIndicator />
+            </View>
+          ) : (
+            <View style={{ height: 12 }} />
+          )
+        }
       />
     </View>
   );
@@ -281,8 +276,7 @@ export default function MyClassesScreen({ route, navigation }) {
 
 function formatLocal(iso) {
   try {
-    const d = new Date(iso);
-    return d.toLocaleString();
+    return new Date(iso).toLocaleString();
   } catch {
     return iso ?? "";
   }
@@ -292,7 +286,6 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#0b0b0c" },
   listPad: { padding: 12, paddingTop: 8 },
   title: { color: "white", fontSize: 16, fontWeight: "600" },
-  sub: { color: "#9aa0a6", marginTop: 2 },
   row: { color: "#c9cdd1", marginTop: 6 },
   rowBtns: { flexDirection: "row", marginTop: 12 },
   center: {

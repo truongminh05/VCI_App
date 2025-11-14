@@ -12,10 +12,9 @@ import {
 } from "react-native";
 import { supabase } from "../../../lib/supabase";
 
-const STATUS_ON_TIME = "dung_gio"; // đổi theo enum của bạn nếu khác
+const STATUS_ON_TIME = "dung_gio"; // enum chuẩn
 
 export default function ManualAttendanceScreen({ route, navigation }) {
-  // Có thể được truyền 1 hoặc nhiều tham số từ màn trước
   const sessionId = route?.params?.buoihoc_id ?? null;
   const lopIdFromNav = route?.params?.lop_id ?? null;
   const tenLopFromNav = route?.params?.ten_lop ?? "";
@@ -27,13 +26,11 @@ export default function ManualAttendanceScreen({ route, navigation }) {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Danh sách sinh viên { id, ho_ten, ma_sinh_vien }
-  const [students, setStudents] = useState([]);
+  const [students, setStudents] = useState([]); // [{id, ho_ten, ma_sinh_vien, marked}]
   const [checked, setChecked] = useState({}); // id => boolean
   const [q, setQ] = useState("");
 
-  // Nếu chỉ có buoihoc_id mà chưa có lop_id → tra từ bảng buoihoc,
-  // sau đó (riêng) lấy tên lớp từ bảng lop (tránh phụ thuộc quan hệ FK trong schema cache).
+  // Lấy lop_id từ buổi nếu chưa có
   useEffect(() => {
     (async () => {
       if (lopId || !sessionId) return;
@@ -50,138 +47,110 @@ export default function ManualAttendanceScreen({ route, navigation }) {
       }
       if (bh?.lop_id) {
         setLopId(bh.lop_id);
-        // lấy tên lớp
-        const { data: lop, error: e2 } = await supabase
+        const { data: lop } = await supabase
           .from("lop")
           .select("ten_lop")
           .eq("id", bh.lop_id)
           .maybeSingle();
-        if (!e2) setLopName(lop?.ten_lop ?? "");
+        setLopName(lop?.ten_lop ?? "");
       }
       setLoadingMeta(false);
     })();
   }, [sessionId, lopId]);
 
-  // Nếu có lopId nhưng chưa có tên lớp (truyền thiếu) → nạp tên lớp
+  // Nếu có lopId mà chưa có tên → nạp
   useEffect(() => {
     (async () => {
       if (!lopId || lopName) return;
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from("lop")
         .select("ten_lop")
         .eq("id", lopId)
         .maybeSingle();
-      if (!error) setLopName(data?.ten_lop ?? "");
+      setLopName(data?.ten_lop ?? "");
     })();
   }, [lopId, lopName]);
 
+  // Tải danh sách theo buổi: đã join sẵn tên & tình trạng
   const loadStudents = useCallback(async () => {
-    if (!lopId) return;
-    setLoading(true);
+    if (!sessionId) return;
     try {
-      // 1) lấy danh sách SV của lớp qua RPC (bỏ qua RLS phức tạp)
-      const { data, error } = await supabase.rpc("get_class_students", {
-        p_lop_id: lopId,
+      setLoading(true);
+      const { data, error } = await supabase.rpc("get_attendance_list", {
+        p_buoihoc_id: sessionId,
       });
       if (error) throw error;
 
-      const base = (data ?? []).map((r) => ({
-        id: r.sinh_vien_id,
-        ho_ten: r.ho_ten ?? "(Chưa có tên)",
-        ma_sinh_vien: r.ma_sinh_vien ?? "",
+      const rows = (data ?? []).map((r) => ({
+        id: String(r.sinh_vien_id),
+        ho_ten: r.ho_ten || "(Chưa có tên)",
+        ma_sinh_vien: r.ma_sinh_vien || "",
+        marked: r.trang_thai && r.trang_thai !== "vang",
       }));
-      setStudents(base);
+      setStudents(rows);
 
-      // 2) nếu đang ở một buổi học cụ thể -> pre-check ai đã điểm danh
-      if (sessionId) {
-        const { data: att, error: e2 } = await supabase.rpc(
-          "get_session_attendance",
-          { p_buoihoc_id: sessionId }
-        );
-        if (e2) throw e2;
-
-        const preset = {};
-        (att ?? []).forEach((r) => {
-          if (r.checked) preset[r.sinh_vien_id] = true;
-        });
-        setChecked(preset);
-      }
+      // pre-check những bạn đã có mặt
+      const initial = {};
+      rows.forEach((r) => {
+        if (r.marked) initial[r.id] = true;
+      });
+      setChecked(initial);
     } catch (e) {
-      Alert.alert("Lỗi", e?.message || String(e));
+      Alert.alert("Lỗi", e?.message || "Không tải được danh sách.");
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
-  }, [lopId, sessionId]);
+  }, [sessionId]);
 
-  // Nạp danh sách SV khi có lopId (dù đến từ nav hay tra từ buoihoc)
   useEffect(() => {
-    if (!lopId) return;
     loadStudents();
-  }, [lopId, loadStudents]);
+  }, [loadStudents]);
 
   const filtered = useMemo(() => {
     const s = (q || "").trim().toLowerCase();
     if (!s) return students;
-    return students.filter((x) => {
-      const name = (x.ho_ten || "").toLowerCase();
-      const code = (x.ma_sinh_vien || "").toLowerCase();
-      return name.includes(s) || code.includes(s);
-    });
+    return students.filter(
+      (x) =>
+        (x.ho_ten || "").toLowerCase().includes(s) ||
+        (x.ma_sinh_vien || "").toLowerCase().includes(s)
+    );
   }, [students, q]);
 
-  const toggle = (id) => {
-    setChecked((prev) => ({ ...prev, [id]: !prev[id] }));
-  };
+  const toggle = (id) => setChecked((prev) => ({ ...prev, [id]: !prev[id] }));
+  const selectAll = () =>
+    setChecked(Object.fromEntries(filtered.map((s) => [s.id, true])));
+  const clearAll = () =>
+    setChecked(Object.fromEntries(filtered.map((s) => [s.id, false])));
 
-  const selectAll = () => {
-    const next = { ...checked };
-    filtered.forEach((s) => (next[s.id] = true));
-    setChecked(next);
-  };
-
-  const clearAll = () => {
-    const next = { ...checked };
-    filtered.forEach((s) => (next[s.id] = false));
-    setChecked(next);
-  };
-
-  const onRefresh = async () => {
+  const onRefresh = () => {
     setRefreshing(true);
-    await loadStudents();
-    setRefreshing(false);
+    loadStudents();
   };
 
   const save = async () => {
     if (!sessionId) {
-      Alert.alert(
-        "Thiếu thông tin",
-        "Cần 'buoihoc_id' để lưu điểm danh thủ công."
-      );
-      return;
+      return Alert.alert("Thiếu thông tin", "Cần buoihoc_id để lưu điểm danh.");
     }
-    const selectedIds = Object.entries(checked)
-      .filter(([, v]) => v === true)
-      .map(([uid]) => uid);
-
-    if (selectedIds.length === 0) {
-      Alert.alert("Thông báo", "Bạn chưa chọn sinh viên nào.");
-      return;
-    }
+    const chosen = Object.entries(checked)
+      .filter(([, v]) => v)
+      .map(([id]) => id);
+    if (!chosen.length)
+      return Alert.alert("Thông báo", "Bạn chưa chọn sinh viên nào.");
 
     try {
-      // Gọi RPC ép enum + đặt 'thu_cong' ở DB
+      // Lưu từng người bằng RPC thu công (server sẽ cast enum)
       await Promise.all(
-        selectedIds.map((uid) =>
+        chosen.map((uid) =>
           supabase.rpc("insert_diemdanh_thucong", {
             p_buoihoc: sessionId,
             p_sinhvien: uid,
-            p_trang_thai: STATUS_ON_TIME, // "dung_gio"
+            p_trang_thai: STATUS_ON_TIME,
           })
         )
       );
-
       Alert.alert("Thành công", "Đã lưu điểm danh.");
-      navigation.goBack();
+      loadStudents();
     } catch (e) {
       Alert.alert("Lỗi lưu điểm danh", e?.message || String(e));
     }
@@ -215,11 +184,9 @@ export default function ManualAttendanceScreen({ route, navigation }) {
   return (
     <View style={styles.container}>
       <Text style={styles.header}>
-        Điểm danh thủ công{" "}
-        {lopName ? `· ${lopName}` : lopId ? `· ${lopId}` : ""}
+        Điểm danh thủ công {lopName ? `· ${lopName}` : ""}
       </Text>
 
-      {/* Thanh công cụ: tìm kiếm + chọn tất cả/bỏ chọn */}
       <View style={styles.tools}>
         <TextInput
           placeholder="Tìm theo tên / mã SV..."
@@ -236,14 +203,7 @@ export default function ManualAttendanceScreen({ route, navigation }) {
         </TouchableOpacity>
       </View>
 
-      {loadingMeta ? (
-        <View style={styles.center}>
-          <ActivityIndicator />
-          <Text style={{ color: "#9aa0a6", marginTop: 8 }}>
-            Đang tải thông tin lớp…
-          </Text>
-        </View>
-      ) : loading ? (
+      {loadingMeta || loading ? (
         <View style={styles.center}>
           <ActivityIndicator />
         </View>
@@ -258,7 +218,7 @@ export default function ManualAttendanceScreen({ route, navigation }) {
               <Text style={{ color: "#c9cdd1" }}>
                 {lopId
                   ? "Chưa có sinh viên trong lớp."
-                  : "Chưa xác định được lớp. Hãy mở từ danh sách buổi học hoặc truyền lop_id."}
+                  : "Không xác định được lớp."}
               </Text>
             </View>
           }

@@ -331,6 +331,36 @@ export default function AttendanceListScreen() {
       setRows([]);
     }
   }, [selectedSession?.id, selectedClass?.id, loadRows]);
+  // ở gần cuối file, ngay dưới useEffect hiện tại là đẹp
+
+  useEffect(() => {
+    // nếu chưa chọn buổi thì không sub
+    if (!selectedSession?.id) return;
+
+    // tạo 1 channel riêng cho buổi này
+    const channel = supabase
+      .channel(`diemdanh_realtime_${selectedSession.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*", // INSERT / UPDATE / DELETE đều nghe
+          schema: "public",
+          table: "diemdanh",
+          filter: `buoihoc_id=eq.${selectedSession.id}`,
+        },
+        (payload) => {
+          // console.log("Realtime diemdanh:", payload);
+          // mỗi khi có thay đổi điểm danh -> reload bảng
+          loadRows();
+        }
+      )
+      .subscribe();
+
+    // cleanup khi đổi buổi hoặc rời màn
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [selectedSession?.id, loadRows]);
 
   /* ------------------- thống kê nhanh ------------------- */
   const total = rows.length;

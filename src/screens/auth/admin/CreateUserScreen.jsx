@@ -25,7 +25,13 @@ export default function CreateUserScreen() {
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [role, setRole] = useState("sinhvien");
-  const [code, setCode] = useState(""); // Mã SV/GV (dùng chung 1 cột)
+
+  // Mã SV/GV + trạng thái kiểm tra
+  const [code, setCode] = useState("");
+  // idle | checking | available | taken | error
+  const [codeStatus, setCodeStatus] = useState("idle");
+  const [codeMsg, setCodeMsg] = useState("");
+
   const [creating, setCreating] = useState(false);
 
   const validate = () => {
@@ -52,129 +58,118 @@ export default function CreateUserScreen() {
     return { em, pw, fn };
   };
 
-  // --- NEW: kiểm tra trùng mã ---
+  // ==== KIỂM TRA MÃ (cố gắng qua RPC; fallback đếm nhanh; nếu thiếu quyền => coi như khả dụng) ====
   const isCodeTaken = async (ma) => {
-    // thử RPC ưu tiên
+    if (!ma) return false;
     try {
-      const rpc = await supabase.rpc("admin_check_code_available", {
-        p_ma_sv: ma,
-      });
-      if (!rpc.error && rpc.data && typeof rpc.data.available === "boolean") {
-        return !rpc.data.available; // taken nếu available=false
-      }
-    } catch {
-      // bỏ qua để fallback
-    }
-
-    // fallback: query trực tiếp hoso (cần quyền đọc)
-    const { error, count } = await supabase
-      .from("hoso")
-      .select("nguoi_dung_id", { count: "exact", head: true })
-      .eq("ma_sinh_vien", ma);
-
-    if (error) {
-      throw new Error(
-        "Không kiểm tra được trùng mã (quyền hoặc RLS). Liên hệ Admin backend để bật RPC admin_check_code_available."
+      // 1) Thử RPC security definer nếu bạn đã tạo (khuyến nghị)
+      const { data, error } = await supabase.rpc(
+        "admin_check_code_available_v2",
+        { p_code: ma }
       );
+      if (error) throw error;
+      if (data && typeof data.available === "boolean") {
+        return !data.available; // available=true => chưa bị dùng
+      }
+      // 2) Fallback: đếm nhanh (có thể bị RLS chặn)
+      const { count, error: e2 } = await supabase
+        .from("hoso")
+        .select("nguoi_dung_id", { count: "exact", head: true })
+        .eq("ma_sinh_vien", ma);
+      if (e2) throw e2; // nếu RLS chặn, nhảy vào catch
+      return (count || 0) > 0;
+    } catch {
+      // Không đủ quyền / chưa có RPC -> KHÔNG chặn tạo tài khoản
+      return false;
     }
-    return (count || 0) > 0;
   };
 
+  const handleCodeBlur = async () => {
+    const normalized = (code || "").trim().toUpperCase();
+    if (!normalized) {
+      setCodeStatus("idle");
+      setCodeMsg("");
+      return;
+    }
+    try {
+      setCodeStatus("checking");
+      setCodeMsg("Đang kiểm tra…");
+      const taken = await isCodeTaken(normalized);
+      if (taken) {
+        setCodeStatus("taken");
+        setCodeMsg(`Mã đã tồn tại: ${normalized}`);
+      } else {
+        setCodeStatus("available");
+        setCodeMsg(`Mã khả dụng: ${normalized}`);
+      }
+    } catch (e) {
+      setCodeStatus("error");
+      setCodeMsg(e?.message || "Không kiểm tra được trùng mã.");
+    }
+  };
+
+  // ==== TẠO USER BẰNG EDGE FUNCTION `create-user` ====
   const createUser = async () => {
     const v = validate();
     if (!v) return;
     const { em, pw, fn } = v;
 
-    // Chuẩn hoá mã: viết HOA để thống nhất
     const maSV = (code || "").trim().toUpperCase() || null;
+
+    // Nếu người dùng đã blur nhưng vẫn đang "checking"
+    if (codeStatus === "checking") {
+      Alert.alert("Đang kiểm tra", "Vui lòng đợi kiểm tra mã xong.");
+      return;
+    }
+    // Nếu user chưa blur (idle) mà nhập mã, kiểm tra nhanh 1 lần
+    if (maSV && codeStatus === "idle") {
+      try {
+        setCodeStatus("checking");
+        const taken = await isCodeTaken(maSV);
+        if (taken) {
+          setCodeStatus("taken");
+          setCodeMsg(`Mã đã tồn tại: ${maSV}`);
+          Alert.alert("Trùng mã", `Mã đã tồn tại: ${maSV}.`);
+          return;
+        }
+        setCodeStatus("available");
+        setCodeMsg(`Mã khả dụng: ${maSV}`);
+      } catch (e) {
+        // Không khóa luồng tạo tài khoản chỉ vì thiếu quyền kiểm tra mã
+        setCodeStatus("error");
+        setCodeMsg(e?.message || "Không kiểm tra được trùng mã.");
+      }
+    }
 
     try {
       setCreating(true);
 
-      // 1) Nếu có mã → kiểm tra trùng trước khi tạo
-      if (maSV) {
-        const taken = await isCodeTaken(maSV);
-        if (taken) {
-          Alert.alert(
-            "Trùng mã",
-            `Mã đã tồn tại: ${maSV}. Vui lòng nhập mã khác.`
-          );
-          setCreating(false);
-          return;
-        }
-      }
-
-      // 2) Thử RPC mới có p_ma_sv
-      let newUserId = null;
-      const tryNew = await supabase.rpc("admin_create_user", {
-        p_email: em,
-        p_password: pw,
-        p_full_name: fn,
-        p_role: role, // 'sinhvien' | 'giangvien' | 'quantri'
-        p_ma_sv: maSV, // truyền trực tiếp nếu server hỗ trợ
+      // GỌI EDGE FUNCTION (chuẩn Supabase Admin API)
+      const { data, error } = await supabase.functions.invoke("admin_users", {
+        body: {
+          action: "create",
+          email: em,
+          password: pw,
+          full_name: fn,
+          vai_tro: role, // "sinhvien" | "giangvien" | "quantri"
+          ma_sinh_vien: maSV, // mã SV/GV (nếu có)
+        },
       });
 
-      if (tryNew.error) {
-        // 3) Fallback: RPC cũ không có p_ma_sv
-        const sigMismatch =
-          /does not exist|function .*admin_create_user|named argument|too many arguments/i.test(
-            tryNew.error.message || ""
-          );
+      if (error) {
+        const msg = (error.message || "").toLowerCase();
+        if (msg.includes("unauthorized"))
+          throw new Error("Bạn cần đăng nhập với tài khoản admin.");
+        if (msg.includes("forbidden"))
+          throw new Error("Chỉ tài khoản 'quản trị' mới được tạo người dùng.");
+        if (msg.includes("email_taken") || msg.includes("409"))
+          throw new Error("Email đã tồn tại.");
+        throw new Error(error.message);
+      }
 
-        if (!sigMismatch) {
-          throw tryNew.error;
-        }
-
-        const { data: oldData, error: oldErr } = await supabase.rpc(
-          "admin_create_user",
-          {
-            p_email: em,
-            p_password: pw,
-            p_full_name: fn,
-            p_role: role,
-          }
-        );
-        if (oldErr) throw oldErr;
-
-        newUserId = oldData?.user_id || oldData?.id || null;
-
-        // Ghi mã vào hồ sơ nếu có nhập
-        if (maSV && newUserId) {
-          // Kiểm tra trùng lần nữa ngay trước khi cập nhật (race-condition phòng trường hợp user khác vừa đăng ký)
-          const takenAgain = await isCodeTaken(maSV);
-          if (takenAgain) {
-            Alert.alert(
-              "Trùng mã",
-              `Mã đã bị dùng trong lúc tạo: ${maSV}. Tài khoản vẫn được tạo nhưng chưa gán mã.`
-            );
-          } else {
-            const { error: upErr } = await supabase.rpc(
-              "admin_update_student_profile",
-              {
-                p_user_id: newUserId,
-                p_ho_ten: fn,
-                p_ma_sv: maSV,
-              }
-            );
-            if (upErr) throw upErr;
-          }
-        }
-      } else {
-        // RPC mới
-        newUserId = tryNew.data?.user_id || tryNew.data?.id || null;
-
-        // Bảo hiểm cập nhật mã (không sao nếu giống nhau)
-        if (maSV && newUserId) {
-          // Kiểm tra trùng lần nữa trước khi set (nếu RPC chưa set)
-          const takenAgain = await isCodeTaken(maSV);
-          if (!takenAgain) {
-            await supabase.rpc("admin_update_student_profile", {
-              p_user_id: newUserId,
-              p_ho_ten: fn,
-              p_ma_sv: maSV,
-            });
-          }
-        }
+      const newUserId = data?.user_id;
+      if (!newUserId) {
+        throw new Error("Hàm tạo tài khoản không trả về user_id.");
       }
 
       Alert.alert("Thành công", "Đã tạo tài khoản người dùng.");
@@ -183,15 +178,24 @@ export default function CreateUserScreen() {
       setFullName("");
       setRole("sinhvien");
       setCode("");
+      setCodeStatus("idle");
+      setCodeMsg("");
     } catch (e) {
-      const msg = /FORBIDDEN/i.test(String(e?.message))
-        ? "Bạn không có quyền (chỉ Admin)."
-        : e?.message || "Không tạo được tài khoản.";
+      const msg = e?.message || "Không tạo được tài khoản.";
       Alert.alert("Lỗi", msg);
     } finally {
       setCreating(false);
     }
   };
+
+  const codeHelperColor =
+    codeStatus === "available"
+      ? "#22c55e"
+      : codeStatus === "taken"
+      ? "#ef4444"
+      : codeStatus === "error"
+      ? "#f59e0b"
+      : "#9aa0a6"; // checking/idle
 
   return (
     <SafeAreaView className="bg-black flex-1">
@@ -231,7 +235,6 @@ export default function CreateUserScreen() {
             onChangeText={setFullName}
           />
 
-          {/* Mã SV/GV chung 1 cột */}
           <Text className="text-zinc-400 mt-3 mb-2">Mã (SV/GV)</Text>
           <TextInput
             style={styles.input}
@@ -239,8 +242,18 @@ export default function CreateUserScreen() {
             placeholderTextColor="#6b7280"
             autoCapitalize="characters"
             value={code}
-            onChangeText={setCode}
+            onChangeText={(t) => {
+              setCode((t || "").toUpperCase());
+              setCodeStatus("idle");
+              setCodeMsg("");
+            }}
+            onBlur={handleCodeBlur}
           />
+          {!!codeMsg && (
+            <Text style={{ color: codeHelperColor, marginTop: 6 }}>
+              {codeStatus === "checking" ? "Đang kiểm tra…" : codeMsg}
+            </Text>
+          )}
 
           <Text className="text-zinc-400 mt-3 mb-2">Vai trò</Text>
           <View style={styles.roleRow}>
@@ -266,7 +279,7 @@ export default function CreateUserScreen() {
             className="mt-4"
             title={creating ? "Đang tạo..." : "Tạo tài khoản"}
             onPress={createUser}
-            disabled={creating}
+            disabled={creating || codeStatus === "checking"}
           />
         </Card>
       </View>
