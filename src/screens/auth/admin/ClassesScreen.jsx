@@ -283,9 +283,13 @@ export default function ClassesScreen() {
     try {
       setSearching(true);
 
-      const currentIds = new Set(
-        roster.filter((r) => !r.noAccount).map((r) => r.id)
-      );
+      // Lấy toàn bộ sinh viên đã thuộc bất kỳ lớp nào (bảng dangky)
+      const { data: allEnrolls, error: enrollError } = await supabase
+        .from("dangky")
+        .select("sinh_vien_id");
+      if (enrollError) throw enrollError;
+
+      const usedIds = new Set((allEnrolls || []).map((x) => x.sinh_vien_id));
 
       const kw = (candidateQuery || "").trim();
       let q = supabase
@@ -302,7 +306,8 @@ export default function ClassesScreen() {
       if (error) throw error;
 
       const filtered = (data || [])
-        .filter((p) => !currentIds.has(p.nguoi_dung_id))
+        // Chỉ lấy sinh viên CHƯA thuộc bất kỳ lớp nào
+        .filter((p) => !usedIds.has(p.nguoi_dung_id))
         .map((p) => ({
           id: p.nguoi_dung_id,
           ho_ten: p.ho_ten ?? "(Chưa có tên)",
@@ -315,7 +320,7 @@ export default function ClassesScreen() {
     } finally {
       setSearching(false);
     }
-  }, [candidateQuery, roster, showRoster, selectedClass?.id]);
+  }, [candidateQuery, showRoster, selectedClass?.id]);
 
   useEffect(() => {
     searchCandidates();
