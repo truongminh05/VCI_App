@@ -177,10 +177,11 @@ export default function AttendanceListScreen() {
         .select(
           `
           id, lop_id,
-          thoi_gian_bat_dau, thoi_gian_ket_thuc,
-          mo_tu, dong_den, tre_sau_phut,
-          monhoc:monhoc_id ( id, ma_mon, ten_mon ),
-          lop:lop_id ( id, ten_lop )
+    thoi_gian_bat_dau, thoi_gian_ket_thuc,
+    mo_tu, dong_den, tre_sau_phut,
+    tao_luc,
+    monhoc:monhoc_id ( id, ma_mon, ten_mon ),
+    lop:lop_id ( id, ten_lop )
         `
         )
         .eq("lop_id", lopId)
@@ -196,6 +197,7 @@ export default function AttendanceListScreen() {
         mo_tu: b.mo_tu || null,
         dong_den: b.dong_den || null,
         tre_sau_phut: b.tre_sau_phut || 0,
+        created_at: b.tao_luc || b.thoi_gian_bat_dau,
         monhoc: b.monhoc || null,
         lop: b.lop || null,
       }));
@@ -213,6 +215,33 @@ export default function AttendanceListScreen() {
       setLoadingSessions(false);
     }
   }, []);
+  // Realtime: khi có buổi học mới / cập nhật -> reload danh sách buổi
+  useEffect(() => {
+    const lopId = selectedClass?.id;
+    if (!lopId) return;
+
+    const channel = supabase
+      .channel(`realtime_buoihoc_${lopId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*", // hoặc "INSERT" nếu bạn chỉ cần khi tạo mới
+          schema: "public",
+          table: "buoihoc",
+          filter: `lop_id=eq.${lopId}`,
+        },
+        () => {
+          // mỗi khi có buổi mới / cập nhật trong lớp này -> nạp lại
+          loadSessions(lopId);
+        }
+      )
+      .subscribe();
+
+    // cleanup khi đổi lớp hoặc rời màn
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [selectedClass?.id, loadSessions]);
 
   useEffect(() => {
     loadSessions(selectedClass?.id || null);
@@ -229,12 +258,17 @@ export default function AttendanceListScreen() {
     try {
       setLoadingRows(true);
 
-      // a) danh sách đăng ký lớp
+      const sessionCreatedAt =
+        selectedSession?.created_at || selectedSession?.start;
+
+      // a) danh sách sinh viên ĐƯỢC TÍNH cho buổi này
       const { data: enrolls, error: e1 } = await supabase
-        .from("dangky")
-        .select("sinh_vien_id")
-        .eq("lop_id", lopId);
+        .from("thamgia_lop")
+        .select("sinh_vien_id, ngay_tham_gia")
+        .eq("lop_id", lopId)
+        .lte("ngay_tham_gia", sessionCreatedAt); // chỉ những người tham gia trước khi buổi được tạo
       if (e1) throw e1;
+
       const ids = (enrolls ?? []).map((x) => x.sinh_vien_id);
       if (!ids.length) {
         setRows([]);
@@ -321,6 +355,7 @@ export default function AttendanceListScreen() {
     selectedSession?.tre_sau_phut,
     selectedSession?.mo_tu,
     selectedSession?.dong_den,
+    selectedSession?.created_at,
   ]);
 
   useEffect(() => {
@@ -333,34 +368,46 @@ export default function AttendanceListScreen() {
   }, [selectedSession?.id, selectedClass?.id, loadRows]);
   // ở gần cuối file, ngay dưới useEffect hiện tại là đẹp
 
+  // Realtime: khi có thay đổi DIEMDANH hoặc DANGKY -> reload danh sách
   useEffect(() => {
-    // nếu chưa chọn buổi thì không sub
-    if (!selectedSession?.id) return;
+    const lopId = selectedClass?.id;
+    const sessionId = selectedSession?.id;
+    if (!lopId || !sessionId) return;
 
-    // tạo 1 channel riêng cho buổi này
     const channel = supabase
-      .channel(`diemdanh_realtime_${selectedSession.id}`)
+      .channel(`realtime_attendance_${lopId}_${sessionId}`)
+      // 1) thay đổi bảng diemdanh (SV quét mã, điểm danh lại, v.v.)
       .on(
         "postgres_changes",
         {
-          event: "*", // INSERT / UPDATE / DELETE đều nghe
+          event: "*",
           schema: "public",
           table: "diemdanh",
-          filter: `buoihoc_id=eq.${selectedSession.id}`,
+          filter: `buoihoc_id=eq.${sessionId}`,
         },
-        (payload) => {
-          // console.log("Realtime diemdanh:", payload);
-          // mỗi khi có thay đổi điểm danh -> reload bảng
-          loadRows();
+        () => {
+          loadRows(); // nạp lại bảng
+        }
+      )
+      // 2) thay đổi bảng dangky (thêm / xoá SV khỏi lớp)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "dangky",
+          filter: `lop_id=eq.${lopId}`,
+        },
+        () => {
+          loadRows(); // nạp lại, sẽ có thêm SV mới (trạng thái "Chưa điểm danh")
         }
       )
       .subscribe();
 
-    // cleanup khi đổi buổi hoặc rời màn
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [selectedSession?.id, loadRows]);
+  }, [selectedClass?.id, selectedSession?.id, loadRows]);
 
   /* ------------------- thống kê nhanh ------------------- */
   const total = rows.length;

@@ -56,6 +56,32 @@ export default function ClassesScreen() {
 
   // --- Excel ---
   const [importing, setImporting] = useState(false);
+  // Khi đang mở roster và có thay đổi dangky của lớp -> tự reload
+  useEffect(() => {
+    const lopId = selectedClass?.id;
+    if (!showRoster || !lopId) return;
+
+    const channel = supabase
+      .channel(`realtime_roster_${lopId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "dangky",
+          filter: `lop_id=eq.${lopId}`,
+        },
+        () => {
+          // reload danh sách sinh viên trong modal
+          openRoster({ id: lopId });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [showRoster, selectedClass?.id]);
 
   // ================= LỚP =================
   const loadClasses = useCallback(async () => {

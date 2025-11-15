@@ -153,6 +153,32 @@ export default function AttendanceSessionScreen({ route }) {
       setLoadingSessions(false);
     }
   }, []);
+  // Realtime buổi học cho màn Phiên điểm danh
+  useEffect(() => {
+    const lopId = selectedClass?.id;
+    if (!lopId) return;
+
+    const channel = supabase
+      .channel(`realtime_buoihoc_session_${lopId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*", // có thể đổi thành "INSERT" nếu muốn
+          schema: "public",
+          table: "buoihoc",
+          filter: `lop_id=eq.${lopId}`,
+        },
+        () => {
+          // có buổi mới/cập nhật -> nạp lại danh sách
+          loadSessionsForClass(lopId);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [selectedClass?.id, loadSessionsForClass]);
 
   useEffect(() => {
     if (selectedClass?.id) loadSessionsForClass(selectedClass.id);

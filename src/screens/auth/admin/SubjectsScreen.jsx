@@ -94,6 +94,29 @@ export default function SubjectsScreen() {
       setLoading(false);
     }
   }, [search]);
+  useEffect(() => {
+    // nghe mọi thay đổi trên bảng monhoc
+    const channel = supabase
+      .channel("realtime_monhoc_admin")
+      .on(
+        "postgres_changes",
+        {
+          event: "*", // INSERT / UPDATE / DELETE
+          schema: "public",
+          table: "monhoc",
+        },
+        () => {
+          // có môn mới / sửa / xóa -> tải lại danh sách
+          loadSubjects();
+        }
+      )
+      .subscribe();
+
+    // cleanup khi rời màn
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [loadSubjects]);
 
   useEffect(() => {
     loadSubjects();
@@ -176,12 +199,10 @@ export default function SubjectsScreen() {
     if (!selected?.id || !teacherRow?.nguoi_dung_id) return;
     try {
       setAssigning(true);
-      const { error } = await supabase
-        .from("giangday")
-        .insert({
-          giang_vien_id: teacherRow.nguoi_dung_id,
-          monhoc_id: selected.id,
-        });
+      const { error } = await supabase.from("giangday").insert({
+        giang_vien_id: teacherRow.nguoi_dung_id,
+        monhoc_id: selected.id,
+      });
       if (error) {
         if (
           String(error.message || "")

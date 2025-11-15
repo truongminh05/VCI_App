@@ -36,21 +36,49 @@ const PAGE_PAD = 20;
 function SubjectPicker({ value, onChange }) {
   const [list, setList] = useState([]);
   const mounted = useRef(false);
-
-  useEffect(() => {
-    mounted.current = true;
-    (async () => {
-      const { data, error } = await supabase
-        .from("monhoc")
-        .select("id, ma_mon, ten_mon")
-        .order("ten_mon");
-      if (!error && mounted.current) setList(data || []);
-    })();
-    return () => (mounted.current = false);
+  // hàm dùng lại để load danh sách môn
+  const fetchSubjects = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("monhoc")
+      .select("id, ma_mon, ten_mon")
+      .order("ten_mon");
+    if (!error && mounted.current) {
+      setList(data || []);
+    }
   }, []);
 
+  // load lần đầu khi component mount
+  useEffect(() => {
+    mounted.current = true;
+    fetchSubjects();
+    return () => {
+      mounted.current = false;
+    };
+  }, [fetchSubjects]);
+
+  // realtime: khi bảng monhoc đổi -> reload list
+  useEffect(() => {
+    const channel = supabase
+      .channel("realtime_monhoc_picker")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "monhoc",
+        },
+        () => {
+          fetchSubjects();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [fetchSubjects]);
   const current = useMemo(
-    () => list.find((i) => i.id === value) || null,
+    () => list.find((m) => m.id === value) || null,
     [list, value]
   );
 
