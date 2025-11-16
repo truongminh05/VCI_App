@@ -6,17 +6,62 @@ import React, {
   useMemo,
   useState,
 } from "react";
-import { View, ActivityIndicator, Text, Alert } from "react-native";
+import {
+  View,
+  ActivityIndicator,
+  Text,
+  Alert,
+  Image,
+  Animated,
+} from "react-native";
+
 import { supabase } from "../lib/supabase";
 
 const AuthCtx = createContext(null);
 export const useAuth = () => useContext(AuthCtx);
 
 function Splash() {
+  const scale = React.useRef(new Animated.Value(0.7)).current;
+  const opacity = React.useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.spring(scale, {
+        toValue: 1,
+        friction: 5,
+        useNativeDriver: true,
+      }),
+      Animated.timing(opacity, {
+        toValue: 1,
+        duration: 450,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [scale, opacity]);
+
   return (
     <View className="flex-1 items-center justify-center bg-black">
-      <ActivityIndicator size="large" />
-      <Text style={{ color: "white", marginTop: 8 }}>Đang khởi tạo…</Text>
+      <Animated.Image
+        source={require("../../assets/logo-vci.png")}
+        resizeMode="contain"
+        style={{
+          width: 160,
+          height: 160,
+          marginBottom: 18,
+          opacity,
+          transform: [{ scale }],
+        }}
+      />
+
+      <Text
+        style={{
+          color: "white",
+          fontSize: 20,
+          fontWeight: "600",
+        }}
+      >
+        VCI - CĐ Công Thương VN
+      </Text>
     </View>
   );
 }
@@ -44,20 +89,38 @@ export function AuthProvider({ children }) {
   const [loadingHoso, setLoadingHoso] = useState(false);
 
   // ===== Boot & subscribe auth =====
+  // ===== Boot & subscribe auth =====
   useEffect(() => {
     let mounted = true;
+    const MIN_SPLASH_MS = 1200; // thời gian tối thiểu hiển thị Splash (0.8s)
+    const startedAt = Date.now();
+
     (async () => {
       console.log("[Auth] getSession()");
       const { data, error } = await supabase.auth.getSession();
       if (error) console.log("[Auth] getSession error:", error.message);
       if (mounted) setSession(data?.session ?? null);
-      setBooting(false);
+
+      // đảm bảo Splash hiển thị đủ MIN_SPLASH_MS
+      const elapsed = Date.now() - startedAt;
+      const wait = Math.max(0, MIN_SPLASH_MS - elapsed);
+
+      setTimeout(() => {
+        if (mounted) {
+          setBooting(false);
+        }
+      }, wait);
     })();
+
     const { data: sub } = supabase.auth.onAuthStateChange((evt, s) => {
       console.log("[Auth] onAuthStateChange:", evt, !!s);
       setSession(s ?? null);
     });
-    return () => sub?.subscription?.unsubscribe?.();
+
+    return () => {
+      mounted = false;
+      sub?.subscription?.unsubscribe?.();
+    };
   }, []);
 
   // ===== Hồ sơ (KHÔNG chặn điều hướng) =====

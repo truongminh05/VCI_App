@@ -7,6 +7,7 @@ import CreateUserScreen from "./CreateUserScreen";
 import ClassesScreen from "./ClassesScreen";
 import SessionsScreen from "./SessionsScreen";
 import SubjectsScreen from "./SubjectsScreen"; // <-- IMPORT MÀN HÌNH MỚI
+import ProfileAvatarButton from "../../../components/ProfileAvatarButton";
 
 const Tab = createBottomTabNavigator();
 
@@ -35,6 +36,7 @@ export default function AdminTabs() {
             color={color}
           />
         ),
+        headerRight: () => <ProfileAvatarButton />,
       })}
     >
       <Tab.Screen

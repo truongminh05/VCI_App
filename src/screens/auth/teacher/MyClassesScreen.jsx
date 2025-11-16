@@ -38,6 +38,7 @@ export default function MyClassesScreen({ route, navigation }) {
   const [hasMore, setHasMore] = useState(true);
   const abortRef = useRef(null);
   const onEndBusyRef = useRef(false); // throttle onEndReached
+  const forbiddenOnceRef = useRef(false);
 
   // gắn tên lớp nếu chỉ có id
   useEffect(() => {
@@ -129,14 +130,27 @@ export default function MyClassesScreen({ route, navigation }) {
         if (!(e?.name === "AbortError")) {
           const raw = e?.message || String(e);
           console.log("[GV] rpc error:", raw);
+
           let friendly = raw;
-          if (/FORBIDDEN/i.test(raw)) {
+          const isForbidden = /FORBIDDEN/i.test(raw);
+          const isNotAuth = /NOT_AUTHENTICATED/i.test(raw);
+
+          if (isForbidden) {
             friendly =
               "Bạn chưa được phân công lớp/môn này hoặc chưa là giảng viên của lớp. Hãy kiểm tra bảng phancong_lop/giangday hoặc quyền tạo buổi (tao_boi/giang_vien_id).";
-          } else if (/NOT_AUTHENTICATED/i.test(raw)) {
+          } else if (isNotAuth) {
             friendly = "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.";
           }
-          Alert.alert("Lỗi tải buổi học", friendly);
+
+          // 🔒 Tránh hiện Alert lặp lại liên tục khi không có quyền
+          if (isForbidden) {
+            if (!forbiddenOnceRef.current) {
+              forbiddenOnceRef.current = true;
+              Alert.alert("Lỗi tải buổi học", friendly);
+            }
+          } else {
+            Alert.alert("Lỗi tải buổi học", friendly);
+          }
         }
       } finally {
         setLoading(false);
@@ -149,6 +163,9 @@ export default function MyClassesScreen({ route, navigation }) {
 
   // ✅ chỉ 1 chỗ gọi lần đầu & khi đổi lớp
   useEffect(() => {
+    // đổi lớp → cho phép hiện lại lỗi FORBIDDEN một lần mới
+    forbiddenOnceRef.current = false;
+
     setItems([]);
     setPage(0);
     setHasMore(true);

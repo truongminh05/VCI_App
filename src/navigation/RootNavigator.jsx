@@ -20,6 +20,10 @@ import ManualAttendanceScreen from "../screens/auth/teacher/ManualAttendanceScre
 import AdminTabs from "../screens/auth/admin/AdminTabs";
 import EditUserScreen from "../screens/auth/admin/EditUserScreen";
 
+// Profile
+import ProfileScreen from "../screens/common/ProfileScreen";
+import ProfileAvatarButton from "../components/ProfileAvatarButton";
+
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
@@ -45,6 +49,8 @@ function StudentTabs() {
             color={color}
           />
         ),
+        // Avatar tròn góc phải
+        headerRight: () => <ProfileAvatarButton />,
       })}
     >
       <Tab.Screen
@@ -89,6 +95,7 @@ function TeacherTabs() {
             color={color}
           />
         ),
+        headerRight: () => <ProfileAvatarButton />,
       })}
     >
       <Tab.Screen
@@ -133,17 +140,31 @@ export default function RootNavigator() {
           options={{ headerShown: false }}
         />
       ) : role === "sinhvien" ? (
-        <Stack.Screen
-          name="StudentHome"
-          component={StudentTabs}
-          options={{ headerShown: false }}
-        />
+        <>
+          <Stack.Screen
+            name="StudentHome"
+            component={StudentTabs}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="Profile"
+            component={ProfileScreen}
+            options={{ title: "Trang cá nhân" }}
+          />
+        </>
       ) : role === "giangvien" ? (
-        <Stack.Screen
-          name="TeacherHome"
-          component={TeacherTabs}
-          options={{ headerShown: false }}
-        />
+        <>
+          <Stack.Screen
+            name="TeacherHome"
+            component={TeacherTabs}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="Profile"
+            component={ProfileScreen}
+            options={{ title: "Trang cá nhân" }}
+          />
+        </>
       ) : role === "quantri" ? (
         <>
           <Stack.Screen
@@ -155,6 +176,11 @@ export default function RootNavigator() {
             name="EditUser"
             component={EditUserScreen}
             options={{ title: "Chỉnh sửa người dùng" }}
+          />
+          <Stack.Screen
+            name="Profile"
+            component={ProfileScreen}
+            options={{ title: "Trang cá nhân" }}
           />
         </>
       ) : (
